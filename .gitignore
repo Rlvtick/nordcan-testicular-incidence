@@ -1,0 +1,21 @@
+# Local-only planning & AI-workflow files (never committed)
+CLAUDE.md
+assumptions.md
+next_steps.md
+HANDOFF.md
+.claude/
+
+# Raw data - NORDCAN prohibits redistribution
+data/raw/
+
+# renv - only renv.lock is committed, not the actual package binaries
+renv/library/
+renv/staging/
+
+# R session artifacts
+.Rhistory
+.RData
+.Rproj.user/
+
+# macOS
+.DS_Store
