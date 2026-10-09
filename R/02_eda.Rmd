@@ -1,0 +1,502 @@
+---
+title: "Exploratory Data Analysis (EDA) Of Testicular Cancer Incidence In The Nordic Countries"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: kable
+---
+
+```{r setup, include = FALSE}
+# knitting runs from the project root, like 01. root.dir does not apply when
+# chunks are run one at a time in RStudio - those run from R/ - so paths go
+# through proj_file() below instead of relying on the working directory
+knitr::opts_knit$set(root.dir = "..")
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 9, fig.height = 5.5, dpi = 150)
+```
+
+```{r paths}
+# resolves a project-root-relative path from either the root or R/
+proj_file <- function(path) {
+  if (file.exists(path)) path else file.path("..", path)
+}
+```
+
+```{r libraries}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+# Data Source And Attribution
+
+Data are from **NORDCAN 2.0**, Association of the Nordic Cancer Registries /
+International Agency for Research on Cancer (IARC), at <https://nordcan.iarc.fr>.
+Version 9.6 (06.2026), exported 20 September 2026.
+
+Everything below comes from that single export. The source files aren't bundled
+with this project, so if you'd like to work from your own copy, you can pull the
+same selection straight from NORDCAN using the settings below.
+
+| Filter | Value |
+|---|---|
+| Measure | Incidence |
+| Sex | Males |
+| Cancer site | Testis |
+| View by | Countries |
+| Age groups | 0–85+ (full range) |
+| Periods | Seven 5-year windows, 1990–1994 through 2020–2024 |
+
+# Load
+
+```{r load}
+age_specific <- read_csv(proj_file("data/processed/testis_age_specific.csv"),
+                         show_col_types = FALSE)
+
+published <- read_csv(proj_file("data/processed/nordcan_published.csv"),
+                      show_col_types = FALSE)
+
+# stored as text, so the default sort would run 0-4, 10-14, 15-19, ..., 5-9, 85+
+band_levels <- age_specific |>
+  distinct(age_start, age_band) |>
+  arrange(age_start) |>
+  pull(age_band)
+
+age_specific <- age_specific |>
+  mutate(age_band = factor(age_band, levels = band_levels, ordered = TRUE))
+
+# checked against the bands we expect, not against the list we just built
+expected_bands <- c(paste0(seq(0L, 80L, 5L), "-", seq(4L, 84L, 5L)), "85+")
+
+band_order <- age_specific |>
+  distinct(age_band, age_start) |>
+  arrange(age_band)
+
+stopifnot(
+  "age_band levels are not the 18 expected five-year bands" =
+    identical(levels(age_specific$age_band), expected_bands),
+  "age_band level order does not ascend by age" =
+    all(diff(band_order$age_start) > 0),
+  "age_band is not an ordered factor" =
+    is.ordered(age_specific$age_band)
+)
+
+levels(age_specific$age_band)
+```
+
+Two files come in from the data preparation step:
+
+1. **`testis_age_specific.csv`** is the main table, with one row for every
+   country, period and age band. It carries the case count, the population and
+   the person-years that sit underneath every rate in this report.
+2. **`nordcan_published.csv`** holds NORDCAN's own published totals for each
+   country and period. It's kept around as a reference point, so our figures
+   can be checked against theirs later on.
+
+There are also a few quick checks running alongside the load. Nothing dramatic,
+they just confirm the files turned up in one piece, so a half written or damaged
+copy stops here rather than quietly feeding odd numbers into everything further
+down.
+
+```{r shape}
+N_COUNTRIES <- 5L
+N_PERIODS   <- 7L
+N_BANDS     <- 18L
+
+stopifnot(
+  "age_specific is not countries x periods x age bands" =
+    nrow(age_specific) == N_COUNTRIES * N_PERIODS * N_BANDS,
+  "published is not countries x periods" =
+    nrow(published) == N_COUNTRIES * N_PERIODS,
+  "a country-period is missing some of its 18 age bands" =
+    all(table(age_specific$country, age_specific$period) == N_BANDS),
+  "missing values in the prepared data" =
+    !anyNA(age_specific) && !anyNA(published),
+  "the same age band appears twice in a country-period" =
+    anyDuplicated(age_specific[c("country", "period", "age_start")]) == 0
+)
+
+dim(age_specific)
+```
+
+# Descriptive Statistics
+
+```{r descriptives}
+age_specific |>
+  select(Cases = cases,
+         `Average Annual Population` = pop_annual_mean,
+         `Person-Years` = person_years) |>
+  pivot_longer(everything(), names_to = "Measure", values_to = "value") |>
+  group_by(Measure) |>
+  summarise(Minimum = min(value),
+            Median  = median(value),
+            Mean    = round(mean(value)),
+            Maximum = max(value),
+            .groups = "drop")
+```
+
+That's a first look at the three numeric columns the rest of the report is built
+on, and three things stand out from it:
+
+- **Case counts per cell are small.** The median cell holds about a dozen
+  cases, and the busiest holds 368. That's expected for a rare cancer split
+  five ways by country and eighteen ways by age.
+- **Population sizes vary enormously.** The smallest age band in Iceland and the
+  largest in Sweden are orders of magnitude apart, which is why raw counts can't
+  be compared directly between countries.
+- **Person-years is always five times the population column.** NORDCAN reports
+  an average annual population, and each period covers five years, so this is
+  the column to divide by when working out a rate.
+
+# Graphs Setup
+
+Every country keeps the same colour throughout the report, so a line that's blue
+on one chart is the same country on the next.
+
+```{r palette}
+COUNTRY_COLORS <- c(
+  Denmark = "#2a78d6",
+  Finland = "#eb6834",
+  Iceland = "#1baf7a",
+  Norway  = "#eda100",
+  Sweden  = "#e87ba4"
+)
+
+INK        <- "#0b0b0b"
+INK_SOFT   <- "#52514e"
+INK_MUTED  <- "#8a8984"
+GRID       <- "#e6e5e1"
+
+# shared look: centred bold title, bold axis titles, source line bottom right
+theme_eda <- function() {
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title   = element_text(colour = INK, face = "bold", size = 13,
+                                  hjust = 0.5, margin = margin(b = 12)),
+      plot.caption = element_text(colour = INK_MUTED, size = 9, hjust = 1,
+                                  margin = margin(t = 14)),
+      axis.title.x = element_text(colour = INK_SOFT, size = 10, face = "bold",
+                                  margin = margin(t = 8)),
+      axis.title.y = element_text(colour = INK_SOFT, size = 10, face = "bold",
+                                  margin = margin(r = 8)),
+      axis.text    = element_text(colour = INK_SOFT, size = 9),
+      panel.grid.major = element_line(colour = GRID, linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      strip.text   = element_text(colour = INK, face = "bold", size = 10),
+      plot.margin  = margin(t = 10, r = 14, b = 10, l = 10),
+      legend.position = "none"
+    )
+}
+
+# places the legend inside the panel, anchored to one corner
+legend_corner <- function(x, y) {
+  theme(legend.position = "inside",
+        legend.position.inside = c(x, y),
+        legend.justification = c(x, y),
+        legend.title = element_blank(),
+        legend.text = element_text(colour = INK_SOFT, size = 9),
+        legend.background = element_rect(fill = "white", colour = GRID),
+        legend.margin = margin(4, 6, 4, 6))
+}
+
+SOURCE_NOTE <- "Source: NORDCAN 2.0 (version 9.6 - 06.2026)"
+```
+
+# How Many Cases Each Country Has
+
+Before looking at any rates, it's worth seeing how much data each country
+actually brings. The size of these counts sets how confident we can be in every
+figure that follows. A country with forty cases in a period simply can't support
+as precise an estimate as one with fifteen hundred.
+
+```{r counts-table}
+published |>
+  select(country, period, cases_total) |>
+  pivot_wider(names_from = period, values_from = cases_total) |>
+  rename(Country = country)
+```
+
+```{r counts-plot}
+count_labels <- published |>
+  group_by(country) |>
+  slice_max(period, n = 1) |>
+  ungroup()
+
+ggplot(published, aes(period, cases_total,
+                      group = country, colour = country)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2.2) +
+  geom_text(data = count_labels, aes(label = country),
+            hjust = -0.15, size = 3.4, fontface = "bold", show.legend = FALSE) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  scale_x_discrete(expand = expansion(mult = c(0.04, 0.22))) +
+  labs(title = "Case Counts Per Five-Year Period",
+       x = NULL, y = "Cases", caption = SOURCE_NOTE) +
+  theme_eda() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+The gap between the countries is wide and fairly steady. Sweden, Denmark and
+Norway sit well above the rest, Finland climbs through the middle of the range,
+and Iceland stays flat along the bottom for the whole period.
+
+```{r counts-range}
+published |>
+  group_by(country) |>
+  summarise(`Fewest Cases` = min(cases_total),
+            `Most Cases`   = max(cases_total),
+            `Total Cases`  = sum(cases_total),
+            .groups = "drop") |>
+  arrange(desc(`Total Cases`)) |>
+  rename(Country = country)
+```
+
+Iceland records between 38 and 73 cases in a period. The other four range from
+342 (Finland in 1990–94) up to 1,830 (Sweden in 2015–19). Against the largest
+contributors that's roughly 25 times as many cases, though it translates into a
+smaller difference in precision than that sounds, closer to five times, since a
+rate's margin of error narrows with the square root of the count rather than the
+count itself. Finland sits second from the bottom and bridges the two groups.
+
+The practical upshot is that Iceland's figures carry real uncertainty, and the
+modelling stage keeps that uncertainty visible rather than smoothing it over.
+
+# Population Age Structure
+
+Age standardisation exists because countries don't carry the same mix of ages,
+and that mix doesn't hold still over time either. Since this cancer sits mostly
+in the 25 to 34 range, it is worth seeing how large that slice of the population
+was at the start of the study window compared with the end.
+
+```{r age-structure, fig.height = 7}
+# taken from the data, so a relabelled period cannot silently drop a line
+STUDY_PERIODS <- sort(unique(age_specific$period))
+FIRST_LAST <- STUDY_PERIODS[c(1, length(STUDY_PERIODS))]
+
+# share rather than headcount, so countries of very different size line up
+age_structure <- age_specific |>
+  filter(period %in% FIRST_LAST) |>
+  group_by(country, period) |>
+  mutate(share = person_years / sum(person_years) * 100) |>
+  ungroup()
+
+# colour stays with the country, so the two periods are split by line style
+ggplot(age_structure, aes(age_band, share,
+                          group = period, colour = country, linetype = period)) +
+  geom_line(linewidth = 0.7) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  scale_linetype_manual(values = setNames(c("dashed", "solid"), FIRST_LAST)) +
+  facet_wrap(~ country, ncol = 2) +
+  guides(colour = "none") +
+  labs(title = "Population Age Structure, First Period Against Last",
+       x = "Age Band", y = "Share Of Person-Years (%)",
+       caption = SOURCE_NOTE) +
+  theme_eda() +
+  theme(legend.position = "top",
+        legend.title = element_blank(),
+        legend.text = element_text(colour = INK_SOFT, size = 9),
+        axis.text.x = element_text(angle = 60, hjust = 1, size = 7))
+```
+
+The same shift turns up in all five countries. The share of men under 35 falls
+everywhere between the two periods, while the share aged 65 and over climbs in
+return.
+
+```{r age-structure-summary}
+age_structure |>
+  filter(age_start < 35 | age_start >= 65) |>
+  mutate(`Age Group` = ifelse(age_start < 35, "Under 35", "65 And Over")) |>
+  group_by(Country = country, `Age Group`, period) |>
+  summarise(share = sum(share), .groups = "drop") |>
+  pivot_wider(names_from = period, values_from = share) |>
+  mutate(Change = .data[[FIRST_LAST[2]]] - .data[[FIRST_LAST[1]]]) |>
+  mutate(across(where(is.numeric), \(x) round(x, 1))) |>
+  arrange(`Age Group`, desc(Change))
+```
+
+Finland's older share climbs furthest, from 10.1% to 20.6%. Iceland is worth a
+second look at the other end: it starts with much the youngest profile at 58.2%
+under 35, still has the youngest profile by 2020–24 at 48.0%, and yet gives up
+more ground than anyone else along the way.
+
+That matters for the figures further down. A country whose population is
+drifting out of the 25 to 34 band will see its crude rate drift down with it,
+even when the risk facing a man of any given age has not moved at all, which is
+exactly the problem age standardisation is built to take out.
+
+# Age-Specific Rates
+
+Counts on their own can't be compared across countries, since the populations
+differ so much. Dividing by person-years puts everyone on the same footing: a
+rate per 100,000 person-years.
+
+```{r rates}
+rates <- age_specific |>
+  mutate(rate = cases / person_years * 1e5)
+```
+
+The first view gives each country its own panel, so the shape of the age curve
+can be read on its own terms. Each line within a panel is one five-year period.
+
+```{r rates-facet, fig.height = 7}
+ggplot(rates, aes(age_band, rate, group = period, colour = country)) +
+  geom_line(linewidth = 0.6, alpha = 0.75) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  facet_wrap(~ country, ncol = 2) +
+  labs(title = "Age-Specific Incidence Rate By Country",
+       x = "Age Band", y = "Rate per 100,000 Person-Years",
+       caption = SOURCE_NOTE) +
+  theme_eda() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 7))
+```
+
+All five follow the same pattern: close to nothing in childhood, a steep climb
+through the late teens and twenties, a peak in the late twenties or early
+thirties, then a long decline.
+The differences between countries are in how high the peak goes, not in where it
+sits.
+
+Putting all five on one panel makes that height difference easier to compare.
+Periods are pooled here, so each line is a country's overall age curve across
+the full 1990–2024 window.
+
+```{r rates-pooled}
+pooled <- rates |>
+  group_by(country, age_band, age_start) |>
+  summarise(rate = sum(cases) / sum(person_years) * 1e5, .groups = "drop")
+
+ggplot(pooled, aes(age_band, rate, group = country, colour = country)) +
+  geom_line(linewidth = 0.8) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.08))) +
+  labs(title = "Age-Specific Incidence Rate, All Periods Pooled",
+       x = "Age Band", y = "Rate per 100,000 Person-Years",
+       caption = SOURCE_NOTE) +
+  theme_eda() +
+  legend_corner(0.99, 0.99) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8))
+```
+
+```{r peak-table}
+pooled |>
+  group_by(country) |>
+  slice_max(rate, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  transmute(Country = country,
+            `Peak Age Band` = as.character(age_band),
+            `Peak Rate` = round(rate, 1)) |>
+  arrange(desc(`Peak Rate`))
+```
+
+Denmark and Norway peak highest at around 28 per 100,000. Sweden reaches 17.5
+and Iceland 16.3, while Finland is lowest at 12.9, which is less than half the
+Danish figure. What doesn't change is when the peak arrives: every country peaks
+somewhere in the 25 to 34 range. The countries differ in level, not in the age at which the disease
+appears.
+
+# Small Counts
+
+Not every combination of country, period and age band contains a case. Where
+those empty cells sit matters, because a rate built on very few cases moves a
+long way on a single extra case. This section is about locating them before any
+modelling is done.
+
+```{r zero-cells}
+zero_cells <- rates |>
+  mutate(is_zero = cases == 0) |>
+  group_by(country, age_band) |>
+  summarise(zeros = sum(is_zero), .groups = "drop")
+
+sum(zero_cells$zeros)
+```
+
+Of the 630 cells in the dataset, 74 contain no cases at all. The map below shows
+where they fall. The number inside a square is how many of the seven periods
+came back empty for that country and age band.
+
+```{r zero-heatmap, fig.height = 3.6}
+ggplot(zero_cells, aes(age_band, country, fill = zeros)) +
+  geom_tile(colour = "#fcfcfb", linewidth = 1.2) +
+  geom_text(aes(label = ifelse(zeros > 0, zeros, ""),
+                colour = zeros >= 5), size = 3, show.legend = FALSE) +
+  scale_colour_manual(values = c(`FALSE` = INK, `TRUE` = "#ffffff")) +
+  scale_fill_gradient(low = "#eef3fa", high = "#1a4f8f", limits = c(0, 7)) +
+  labs(title = "Zero-Case Cells By Country And Age Band",
+       x = "Age Band", y = NULL, caption = SOURCE_NOTE) +
+  theme_eda() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 8),
+        panel.grid.major = element_blank())
+```
+
+```{r zero-by-country}
+zero_cells |>
+  group_by(country) |>
+  summarise(`Zero-Case Cells` = sum(zeros), .groups = "drop") |>
+  arrange(desc(`Zero-Case Cells`)) |>
+  rename(Country = country)
+```
+
+The empties are not spread evenly. Iceland accounts for 48 of the 74 on its own;
+Sweden has just 2.
+
+```{r zero-by-band}
+zero_cells |>
+  group_by(age_band) |>
+  summarise(`Zero-Case Cells` = sum(zeros), .groups = "drop") |>
+  filter(`Zero-Case Cells` > 0) |>
+  arrange(desc(`Zero-Case Cells`)) |>
+  rename(`Age Band` = age_band)
+```
+
+By age, they cluster at the two ends of the range, in the childhood bands and
+the oldest bands, which are exactly the ages where this cancer is least common.
+Those bands carry little weight once rates are age-standardised, so their effect
+on the headline figures is limited. Iceland's wider uncertainty, on the other
+hand, carries through and stays visible in the modelling stage.
+
+# Crude Rate Over Time
+
+Crude rates are the simplest possible summary: total cases divided by total
+person-years, with no adjustment for the fact that countries have different age
+profiles. They're a useful orientation, but they aren't the comparison this project is
+built to make. That one comes later, once rates are age-standardised.
+
+```{r crude-plot}
+ggplot(published, aes(period, crude_rate, group = country, colour = country)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.2) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0.02, 0.06))) +
+  labs(title = "Crude Incidence Rate By Period",
+       x = NULL, y = "Crude Rate per 100,000", caption = SOURCE_NOTE) +
+  theme_eda() +
+  legend_corner(0.99, 0.01) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+Denmark starts highest and stays fairly flat. Norway, Sweden and Finland all
+climb over the period, with Norway overtaking Denmark in the middle years before
+easing back. Iceland moves around far more than the others from period to
+period, which is what forty to seventy cases will do to a rate.
+
+```{r crude-spread}
+published |>
+  group_by(period) |>
+  summarise(`Lowest Rate`       = min(crude_rate),
+            `Highest Rate`      = max(crude_rate),
+            `High-To-Low Ratio` = max(crude_rate) / min(crude_rate),
+            .groups = "drop") |>
+  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
+  rename(Period = period)
+```
+
+The ratio is worked out fresh for each period, comparing whichever countries are
+highest and lowest at that point rather than fixing on one pair. On crude rates
+the gap narrows steadily across the study window, from about four times in the
+early 1990s to under two times by 2020–24. Whether that still holds once age
+differences are accounted for is the question the modelling stage is set up to
+answer, so nothing here is the final word on it.

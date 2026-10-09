@@ -1,13 +1,4 @@
-# Local-only planning & AI-workflow files (never committed)
-CLAUDE.md
-assumptions.md
-next_steps.md
-HANDOFF.md
-PROJECT_LOG.md
-.claude/
-
-# All data - NORDCAN prohibits redistribution, and data/processed/ is reshaped
-# raw data so it inherits the same restriction. Computed results go in output/
+# Data files stay local: the raw NORDCAN exports and the tables reshaped from them
 data/
 
 # renv - only renv.lock is committed, not the actual package binaries
