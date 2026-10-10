@@ -1483,10 +1483,9 @@ Testicular Cancer Incidence In The Nordic Countries</h1>
 </div>
 
 
-<pre class="r"><code># resolves a project-root-relative path from either the root or R/
-proj_file &lt;- function(path) {
-  if (file.exists(path)) path else file.path(&quot;..&quot;, path)
-}</code></pre>
+<pre class="r"><code># paths, colours and the chart theme are shared with the other scripts. This
+# one line has to find the file before proj_file() exists to resolve it
+source(if (file.exists(&quot;R/00_setup.R&quot;)) &quot;R/00_setup.R&quot; else &quot;00_setup.R&quot;)</code></pre>
 <pre class="r"><code>library(readr)
 library(dplyr)
 library(tidyr)
@@ -1553,16 +1552,15 @@ band_levels &lt;- age_specific |&gt;
 age_specific &lt;- age_specific |&gt;
   mutate(age_band = factor(age_band, levels = band_levels, ordered = TRUE))
 
-# checked against the bands we expect, not against the list we just built
-expected_bands &lt;- c(paste0(seq(0L, 80L, 5L), &quot;-&quot;, seq(4L, 84L, 5L)), &quot;85+&quot;)
-
+# EXPECTED_BANDS comes from 00_setup.R, so the levels are checked against
+# something this file did not build
 band_order &lt;- age_specific |&gt;
   distinct(age_band, age_start) |&gt;
   arrange(age_band)
 
 stopifnot(
   &quot;age_band levels are not the 18 expected five-year bands&quot; =
-    identical(levels(age_specific$age_band), expected_bands),
+    identical(levels(age_specific$age_band), EXPECTED_BANDS),
   &quot;age_band level order does not ascend by age&quot; =
     all(diff(band_order$age_start) &gt; 0),
   &quot;age_band is not an ordered factor&quot; =
@@ -1587,11 +1585,7 @@ on.</li>
 dramatic, they just confirm the files turned up in one piece, so a half
 written or damaged copy stops here rather than quietly feeding odd
 numbers into everything further down.</p>
-<pre class="r"><code>N_COUNTRIES &lt;- 5L
-N_PERIODS   &lt;- 7L
-N_BANDS     &lt;- 18L
-
-stopifnot(
+<pre class="r"><code>stopifnot(
   &quot;age_specific is not countries x periods x age bands&quot; =
     nrow(age_specific) == N_COUNTRIES * N_PERIODS * N_BANDS,
   &quot;published is not countries x periods&quot; =
@@ -1677,52 +1671,40 @@ working out a rate.</li>
 <h1>Graphs Setup</h1>
 <p>Every country keeps the same colour throughout the report, so a line
 that’s blue on one chart is the same country on the next.</p>
-<pre class="r"><code>COUNTRY_COLORS &lt;- c(
-  Denmark = &quot;#2a78d6&quot;,
-  Finland = &quot;#eb6834&quot;,
-  Iceland = &quot;#1baf7a&quot;,
-  Norway  = &quot;#eda100&quot;,
-  Sweden  = &quot;#e87ba4&quot;
-)
-
-INK        &lt;- &quot;#0b0b0b&quot;
-INK_SOFT   &lt;- &quot;#52514e&quot;
-INK_MUTED  &lt;- &quot;#8a8984&quot;
-GRID       &lt;- &quot;#e6e5e1&quot;
-
-# shared look: centred bold title, bold axis titles, source line bottom right
-theme_eda &lt;- function() {
-  theme_minimal(base_size = 12) +
-    theme(
-      plot.title   = element_text(colour = INK, face = &quot;bold&quot;, size = 13,
-                                  hjust = 0.5, margin = margin(b = 12)),
-      plot.caption = element_text(colour = INK_MUTED, size = 9, hjust = 1,
-                                  margin = margin(t = 14)),
-      axis.title.x = element_text(colour = INK_SOFT, size = 10, face = &quot;bold&quot;,
-                                  margin = margin(t = 8)),
-      axis.title.y = element_text(colour = INK_SOFT, size = 10, face = &quot;bold&quot;,
-                                  margin = margin(r = 8)),
-      axis.text    = element_text(colour = INK_SOFT, size = 9),
-      panel.grid.major = element_line(colour = GRID, linewidth = 0.3),
-      panel.grid.minor = element_blank(),
-      strip.text   = element_text(colour = INK, face = &quot;bold&quot;, size = 10),
-      plot.margin  = margin(t = 10, r = 14, b = 10, l = 10),
-      legend.position = &quot;none&quot;
-    )
-}
-
-# places the legend inside the panel, anchored to one corner
-legend_corner &lt;- function(x, y) {
-  theme(legend.position = &quot;inside&quot;,
-        legend.position.inside = c(x, y),
-        legend.justification = c(x, y),
-        legend.title = element_blank(),
-        legend.text = element_text(colour = INK_SOFT, size = 9),
-        legend.background = element_rect(fill = &quot;white&quot;, colour = GRID),
-        legend.margin = margin(4, 6, 4, 6))
-}
-
-SOURCE_NOTE &lt;- &quot;Source: NORDCAN 2.0 (version 9.6 - 06.2026)&quot;</code></pre>
+<pre class="r"><code>tibble(Country = names(COUNTRY_COLORS),
+       Colour  = unname(COUNTRY_COLORS))</code></pre>
+<div class="kable-table">
+<table>
+<thead>
+<tr class="header">
+<th align="left">Country</th>
+<th align="left">Colour</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">Denmark</td>
+<td align="left">#2a78d6</td>
+</tr>
+<tr class="even">
+<td align="left">Finland</td>
+<td align="left">#eb6834</td>
+</tr>
+<tr class="odd">
+<td align="left">Iceland</td>
+<td align="left">#1baf7a</td>
+</tr>
+<tr class="even">
+<td align="left">Norway</td>
+<td align="left">#eda100</td>
+</tr>
+<tr class="odd">
+<td align="left">Sweden</td>
+<td align="left">#e87ba4</td>
+</tr>
+</tbody>
+</table>
+</div>
 </div>
 <div id="how-many-cases-each-country-has" class="section level1">
 <h1>How Many Cases Each Country Has</h1>

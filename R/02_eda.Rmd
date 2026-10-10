@@ -17,11 +17,10 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
                       fig.width = 9, fig.height = 5.5, dpi = 150)
 ```
 
-```{r paths}
-# resolves a project-root-relative path from either the root or R/
-proj_file <- function(path) {
-  if (file.exists(path)) path else file.path("..", path)
-}
+```{r shared-setup}
+# paths, colours and the chart theme are shared with the other scripts. This
+# one line has to find the file before proj_file() exists to resolve it
+source(if (file.exists("R/00_setup.R")) "R/00_setup.R" else "00_setup.R")
 ```
 
 ```{r libraries}
@@ -68,16 +67,15 @@ band_levels <- age_specific |>
 age_specific <- age_specific |>
   mutate(age_band = factor(age_band, levels = band_levels, ordered = TRUE))
 
-# checked against the bands we expect, not against the list we just built
-expected_bands <- c(paste0(seq(0L, 80L, 5L), "-", seq(4L, 84L, 5L)), "85+")
-
+# EXPECTED_BANDS comes from 00_setup.R, so the levels are checked against
+# something this file did not build
 band_order <- age_specific |>
   distinct(age_band, age_start) |>
   arrange(age_band)
 
 stopifnot(
   "age_band levels are not the 18 expected five-year bands" =
-    identical(levels(age_specific$age_band), expected_bands),
+    identical(levels(age_specific$age_band), EXPECTED_BANDS),
   "age_band level order does not ascend by age" =
     all(diff(band_order$age_start) > 0),
   "age_band is not an ordered factor" =
@@ -102,10 +100,6 @@ copy stops here rather than quietly feeding odd numbers into everything further
 down.
 
 ```{r shape}
-N_COUNTRIES <- 5L
-N_PERIODS   <- 7L
-N_BANDS     <- 18L
-
 stopifnot(
   "age_specific is not countries x periods x age bands" =
     nrow(age_specific) == N_COUNTRIES * N_PERIODS * N_BANDS,
@@ -157,52 +151,8 @@ Every country keeps the same colour throughout the report, so a line that's blue
 on one chart is the same country on the next.
 
 ```{r palette}
-COUNTRY_COLORS <- c(
-  Denmark = "#2a78d6",
-  Finland = "#eb6834",
-  Iceland = "#1baf7a",
-  Norway  = "#eda100",
-  Sweden  = "#e87ba4"
-)
-
-INK        <- "#0b0b0b"
-INK_SOFT   <- "#52514e"
-INK_MUTED  <- "#8a8984"
-GRID       <- "#e6e5e1"
-
-# shared look: centred bold title, bold axis titles, source line bottom right
-theme_eda <- function() {
-  theme_minimal(base_size = 12) +
-    theme(
-      plot.title   = element_text(colour = INK, face = "bold", size = 13,
-                                  hjust = 0.5, margin = margin(b = 12)),
-      plot.caption = element_text(colour = INK_MUTED, size = 9, hjust = 1,
-                                  margin = margin(t = 14)),
-      axis.title.x = element_text(colour = INK_SOFT, size = 10, face = "bold",
-                                  margin = margin(t = 8)),
-      axis.title.y = element_text(colour = INK_SOFT, size = 10, face = "bold",
-                                  margin = margin(r = 8)),
-      axis.text    = element_text(colour = INK_SOFT, size = 9),
-      panel.grid.major = element_line(colour = GRID, linewidth = 0.3),
-      panel.grid.minor = element_blank(),
-      strip.text   = element_text(colour = INK, face = "bold", size = 10),
-      plot.margin  = margin(t = 10, r = 14, b = 10, l = 10),
-      legend.position = "none"
-    )
-}
-
-# places the legend inside the panel, anchored to one corner
-legend_corner <- function(x, y) {
-  theme(legend.position = "inside",
-        legend.position.inside = c(x, y),
-        legend.justification = c(x, y),
-        legend.title = element_blank(),
-        legend.text = element_text(colour = INK_SOFT, size = 9),
-        legend.background = element_rect(fill = "white", colour = GRID),
-        legend.margin = margin(4, 6, 4, 6))
-}
-
-SOURCE_NOTE <- "Source: NORDCAN 2.0 (version 9.6 - 06.2026)"
+tibble(Country = names(COUNTRY_COLORS),
+       Colour  = unname(COUNTRY_COLORS))
 ```
 
 # How Many Cases Each Country Has
