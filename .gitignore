@@ -12,3 +12,6 @@ renv/staging/
 
 # macOS
 .DS_Store
+
+# kept local for now
+output/asr_by_country_period.csv

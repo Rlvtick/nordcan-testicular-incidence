@@ -1,0 +1,531 @@
+---
+title: "Age-Standardised Testicular Cancer Incidence In The Nordic Countries"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: kable
+---
+
+```{r setup, include = FALSE}
+# knitting runs from the project root, like 01 and 02. root.dir does not apply
+# when chunks are run one at a time in RStudio, so paths go through proj_file()
+knitr::opts_knit$set(root.dir = "..")
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 9, fig.height = 5.5, dpi = 150)
+```
+
+Data: **NORDCAN 2.0**, Association of the Nordic Cancer Registries / IARC,
+<https://nordcan.iarc.fr>, version 9.6 (06.2026), exported 20 September 2026.
+The exploratory report carries the full source description.
+
+```{r shared-setup}
+source(if (file.exists("R/00_setup.R")) "R/00_setup.R" else "00_setup.R")
+```
+
+```{r libraries}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(PHEindicatormethods)
+library(broom)
+```
+
+# Load
+
+```{r load}
+age_specific <- read_csv(proj_file("data/processed/testis_age_specific.csv"),
+                         show_col_types = FALSE)
+
+published <- read_csv(proj_file("data/processed/nordcan_published.csv"),
+                      show_col_types = FALSE)
+
+# stored as text, so the default sort would run 0-4, 10-14, 15-19, ..., 5-9, 85+
+band_levels <- age_specific |>
+  distinct(age_start, age_band) |>
+  arrange(age_start) |>
+  pull(age_band)
+
+# the weight vector is positional, so row order inside each group is
+# load-bearing. Checked as the file arrived, before any sorting of our own
+rows_arrived_sorted <- all(tapply(age_specific$age_start,
+                                  paste(age_specific$country, age_specific$period),
+                                  \(x) !is.unsorted(x)))
+
+age_specific <- age_specific |>
+  mutate(age_band = factor(age_band, levels = band_levels, ordered = TRUE)) |>
+  arrange(country, period, age_start)
+
+band_order <- age_specific |>
+  distinct(age_band, age_start) |>
+  arrange(age_band)
+
+stopifnot(
+  "age_band levels are not the 18 expected five-year bands" =
+    identical(levels(age_specific$age_band), EXPECTED_BANDS),
+  "age_band level order does not ascend by age" =
+    all(diff(band_order$age_start) > 0),
+  "age_band is not an ordered factor" =
+    is.ordered(age_specific$age_band),
+  "age_specific is not countries x periods x age bands" =
+    nrow(age_specific) == N_COUNTRIES * N_PERIODS * N_BANDS,
+  "published is not countries x periods" =
+    nrow(published) == N_COUNTRIES * N_PERIODS,
+  "a country-period is missing some of its 18 age bands" =
+    all(table(age_specific$country, age_specific$period) == N_BANDS),
+  "the same age band appears twice in a country-period" =
+    anyDuplicated(age_specific[c("country", "period", "age_start")]) == 0,
+  "missing values in the prepared data" =
+    !anyNA(age_specific) && !anyNA(published),
+  "the input arrived with age bands out of order inside a country-period" =
+    rows_arrived_sorted,
+  "period_mid is not the midpoint of its own period" =
+    all(age_specific$period_mid ==
+          as.integer(substr(age_specific$period, 1, 4)) + 2)
+)
+```
+
+These are the same two files the exploratory analysis used, and I run the same
+checks over them again. I would rather not assume the earlier stage left
+everything tidy.
+
+# The Standard Population
+
+Countries cannot be compared on raw rates, because their age profiles differ and
+the exploratory stage showed those profiles are shifting over time as well. The
+way round it is to reweight every country onto one shared reference population,
+so each is measured as if its age structure were the same as everyone else's.
+That reference is the **European Standard Population 2013**, which is also what
+NORDCAN uses for its own published figures, so our numbers and theirs stay
+directly comparable.
+
+One thing has to be squared away first. The published ESP2013 splits the
+population into 19 age groups and runs up to "90 and over", while this data
+stops at "85 and over". The two have to line up before any reweighting can
+happen, so the top two ESP2013 groups are added together into a single "85 and
+over" group, which leaves 18 to match the data. The weights are read straight
+from the package rather than typed in by hand, so a mistyped number cannot
+quietly change every result downstream.
+
+```{r standard-population}
+data(esp2013, package = "PHEindicatormethods")
+
+esp18 <- c(esp2013[1:17], esp2013[18] + esp2013[19])
+
+stopifnot(
+  "the published ESP2013 vector is not 19 bands" = length(esp2013) == 19,
+  "the collapsed vector is not 18 bands" = length(esp18) == N_BANDS,
+  "collapsing changed the total weight" = sum(esp18) == sum(esp2013),
+  "the top band is not the sum of the last two published weights" =
+    esp18[18] == esp2013[18] + esp2013[19]
+)
+
+tibble(Measure = c("Published Bands", "Collapsed Bands",
+                   "Total Weight", "Top Band Weight"),
+       Value   = c(length(esp2013), length(esp18), sum(esp18), esp18[[18]]))
+```
+
+The table confirms the fold did what it was meant to. Nineteen groups became
+eighteen, the top group now carries 2,500, which is the two old top weights
+added together, and the total is still 100,000.
+
+# Calculating The Standardised Rates
+
+Everything that follows rests on this one calculation, so I work it out three
+times and check the answers against each other rather than trusting any single
+one. Once by hand, straight from the formula. Then with `phe_dsr()`, a
+function from a maintained public health
+package. Then with `calculate_dsr()`, the newer function that replaces it. If
+all three land on the same number, the calculation is doing what it is supposed
+to.
+
+The two package functions are separate pieces of code but come from the same
+package and use the same underlying method, so this is really one hand
+calculation checked against two implementations rather than three fully
+independent routes.
+
+```{r asr-three-ways}
+# the formula itself: each band's rate, weighted by the standard population
+asr_hand <- age_specific |>
+  group_by(country, period, period_mid) |>
+  summarise(asr_hand = sum(esp18 * cases / person_years) / sum(esp18) * 1e5,
+            .groups = "drop")
+
+# phe_dsr takes the weights as a vector
+asr_phe95 <- age_specific |>
+  group_by(country, period) |>
+  phe_dsr(cases, person_years, stdpop = esp18, stdpoptype = "vector",
+          confidence = 0.95) |>
+  select(country, period, asr = value, lower95 = lowercl, upper95 = uppercl)
+
+# two levels in one call are only allowed as 0.95 and 0.998, so 99% runs separately
+asr_phe99 <- age_specific |>
+  group_by(country, period) |>
+  phe_dsr(cases, person_years, stdpop = esp18, stdpoptype = "vector",
+          confidence = 0.99) |>
+  select(country, period, lower99 = lowercl, upper99 = uppercl)
+
+# calculate_dsr rejects a bare vector and wants the weights as a column
+asr_calc <- age_specific |>
+  group_by(country, period) |>
+  mutate(stdpop = esp18) |>
+  calculate_dsr(cases, person_years, stdpop = stdpop, confidence = 0.95) |>
+  ungroup() |>
+  select(country, period, asr_calc = value)
+
+asr <- asr_hand |>
+  left_join(asr_phe95, by = c("country", "period")) |>
+  left_join(asr_phe99, by = c("country", "period")) |>
+  left_join(asr_calc,  by = c("country", "period")) |>
+  left_join(select(published, country, period, asr_nordcan = asr_eu2013),
+            by = c("country", "period"))
+```
+
+```{r shape-after-join}
+stopifnot(
+  "the ASR table is not one row per country-period" =
+    nrow(asr) == N_COUNTRIES * N_PERIODS,
+  "a country-period lost or gained a row in the joins" =
+    anyDuplicated(asr[c("country", "period")]) == 0
+)
+```
+
+```{r three-way-table}
+asr |>
+  summarise(`Hand Against phe_dsr`        = max(abs(asr_hand - asr)),
+            `phe_dsr Against calculate_dsr` = max(abs(asr - asr_calc)),
+            `Ours Against NORDCAN`        = max(abs(asr - asr_nordcan))) |>
+  pivot_longer(everything(), names_to = "Comparison",
+               values_to = "Largest Difference")
+```
+
+All three land on the same number. Against NORDCAN's own published figure the
+largest gap anywhere in the 35 country-periods is about 0.00015, which is small
+enough to be the rounding they apply when publishing rather than any real
+difference in how the rate was worked out.
+
+# Validation Against NORDCAN
+
+The section above showed the three calculations agree with each other. This one
+is the formal check against an outside answer. I set two tolerances before
+running any of this, and I test them here as code rather than reporting them as
+prose, so the report refuses to build if either one is missed.
+
+```{r validation}
+stopifnot(
+  "hand-computed ASR and phe_dsr disagree by more than rounding" =
+    max(abs(asr$asr_hand - asr$asr)) < 1e-9,
+  "phe_dsr and calculate_dsr disagree" =
+    max(abs(asr$asr - asr$asr_calc)) < 1e-9,
+  "computed ASR is outside the pre-registered 0.05 tolerance against NORDCAN" =
+    max(abs(asr$asr - asr$asr_nordcan)) < 0.05
+)
+
+asr |>
+  filter(period == "1990-1994") |>
+  transmute(Country = country,
+            `Hand Computed` = round(asr_hand, 5),
+            `phe_dsr` = round(asr, 5),
+            `calculate_dsr` = round(asr_calc, 5),
+            `NORDCAN Published` = round(asr_nordcan, 5))
+```
+
+The table takes one period and puts all four figures side by side, so the
+agreement can be seen rather than just asserted. Denmark's 1990 to 1994 rate
+comes out at 10.04845 by hand, 10.04845 from each package function, and
+10.04845 in NORDCAN's published table.
+
+# The Standardised Trend
+
+With age differences removed, the countries can finally be put on one chart and
+read against each other.
+
+```{r asr-trend}
+# the five countries share an x position, so everything is nudged apart by the
+# same amount to keep each country's interval readable
+dodge <- position_dodge(width = 0.45)
+
+ggplot(asr, aes(period, asr, group = country, colour = country)) +
+  geom_errorbar(aes(ymin = lower95, ymax = upper95), width = 0,
+                linewidth = 0.7, alpha = 0.55, position = dodge) +
+  geom_line(linewidth = 0.8, position = dodge) +
+  geom_point(size = 2, position = dodge) +
+  scale_colour_manual(values = COUNTRY_COLORS) +
+  # headroom at the top so the legend sits clear of every line
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0.02, 0.30))) +
+  labs(title = "Age-Standardised Incidence Rate By Period, With 95% Intervals",
+       x = NULL, y = "ASR per 100,000 (European Standard 2013)",
+       caption = SOURCE_NOTE) +
+  theme_eda() +
+  legend_corner(0.01, 0.99) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+What stands out is where the movement is, not that there is movement. Denmark
+barely shifts across the whole window, up about 5%, while Finland more than
+doubles. The countries converge because the bottom rises, not because the top
+comes down, which is a different story from the one a shrinking gap might
+suggest on its own. Iceland is the only country to finish lower than it started,
+and across the window its interval overlaps three of the other four at one point
+or another, more than any other country manages, so its place in the ranking is
+the least settled of the five.
+
+```{r asr-change}
+first_last <- range(asr$period)
+
+asr |>
+  filter(period %in% first_last) |>
+  select(country, period, asr) |>
+  pivot_wider(names_from = period, values_from = asr) |>
+  mutate(Change = .data[[first_last[2]]] - .data[[first_last[1]]],
+         `Percent Change` = (.data[[first_last[2]]] /
+                               .data[[first_last[1]]] - 1) * 100) |>
+  arrange(desc(`Percent Change`)) |>
+  rename(Country = country) |>
+  mutate(across(where(is.numeric), \(x) round(x, 1)))
+```
+
+```{r asr-table}
+asr |>
+  transmute(Country = country, Period = period, ASR = round(asr, 2),
+            `95% Lower` = round(lower95, 2), `95% Upper` = round(upper95, 2),
+            `99% Lower` = round(lower99, 2), `99% Upper` = round(upper99, 2)) |>
+  arrange(Country, Period)
+```
+
+The 99% columns are a stricter version of the same interval, there as a check
+rather than as the headline figure. The reasoning is in the rate ratio section
+below.
+
+The interval columns are the ones worth reading here, more than the rates
+themselves. In the final period Sweden's 95% interval spans 0.64 and Iceland's
+spans 3.05, nearly five times wider, for two countries whose point estimates sit
+about one apart. Widening from 95% to 99% barely moves the large countries and
+stretches Iceland noticeably further, which is the small-numbers problem turning
+up again in a second place.
+
+# Rate Ratio By Period
+
+This section reduces five separate rates down to the one number the research
+question actually asks for: how big is the gap.
+
+The measure is straightforward. In each period, take the country with the
+highest rate and divide it by the country with the lowest. A value of 1 would
+mean no gap at all, and the further above 1 it sits the wider the spread. The
+pair is not decided in advance, because the extremes really do move. Denmark and
+Norway take turns at the top, Finland and Iceland take turns at the bottom, and
+four different pairings show up across the seven periods.
+
+Each ratio carries its own margin of error, worked out by combining the
+uncertainty of whichever two countries are involved that period. One note for
+anyone checking the arithmetic: the intervals coming out of the standardisation
+step are slightly lopsided, and I treat them as even. On
+this data the two halves of an interval differ by about 1.5% in a typical case
+once you look at them on the log scale, so the approximation changes very
+little.
+
+```{r rate-ratio}
+Z95 <- qnorm(0.975)
+Z99 <- qnorm(0.995)
+
+# a log-scale variance recovered from each country's own interval
+asr <- asr |>
+  mutate(var_log = ((log(upper95) - log(lower95)) / (2 * Z95))^2)
+
+rate_ratio <- asr |>
+  group_by(period, period_mid) |>
+  summarise(highest_country = country[which.max(asr)],
+            lowest_country  = country[which.min(asr)],
+            highest_asr     = max(asr),
+            lowest_asr      = min(asr),
+            var_log_ratio   = var_log[which.max(asr)] + var_log[which.min(asr)],
+            # do the two extremes' own intervals overlap this period
+            cis_overlap     = lower95[which.max(asr)] <= upper95[which.min(asr)],
+            .groups = "drop") |>
+  mutate(rate_ratio = highest_asr / lowest_asr,
+         se_log     = sqrt(var_log_ratio),
+         lower95    = exp(log(rate_ratio) - Z95 * se_log),
+         upper95    = exp(log(rate_ratio) + Z95 * se_log),
+         lower99    = exp(log(rate_ratio) - Z99 * se_log),
+         upper99    = exp(log(rate_ratio) + Z99 * se_log))
+```
+
+```{r rate-ratio-plot}
+ggplot(rate_ratio, aes(period, rate_ratio)) +
+  # the 99% bar is the same hue faded, so it reads as the wider version of the
+  # same interval rather than as a second measurement
+  geom_errorbar(aes(ymin = lower99, ymax = upper99), width = 0,
+                linewidth = 0.9, colour = COUNTRY_COLORS[["Denmark"]],
+                alpha = 0.35) +
+  geom_errorbar(aes(ymin = lower95, ymax = upper95), width = 0,
+                linewidth = 1.8, colour = COUNTRY_COLORS[["Denmark"]]) +
+  geom_point(size = 2.8, colour = COUNTRY_COLORS[["Denmark"]]) +
+  geom_hline(yintercept = 1, linewidth = 0.3, linetype = "dashed",
+             colour = INK_MUTED) +
+  scale_y_continuous(limits = c(0, NA),
+                     expand = expansion(mult = c(0.02, 0.08))) +
+  labs(title = "Highest To Lowest Rate Ratio, With 95% And 99% Intervals",
+       x = NULL, y = "Rate Ratio",
+       caption = SOURCE_NOTE) +
+  theme_eda() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+The decline is gradual rather than sudden, and that matters for how it should be
+read: a gap that narrows in almost every period is a different thing from one
+that collapses once and then holds. The run of falls breaks only at the end,
+where the final period edges back up from 1.79 to 1.83. The two widest intervals
+on the chart, 2010 to 2014 and 2020 to 2024, are exactly the periods where
+Iceland is one of the extremes, so that closing uptick is also among the least
+precisely measured points on the chart.
+
+The 99% bar is a stricter check rather than a correction. Read across seven
+periods, the chance that at least one 95% interval misses the true value is
+about 30%, and 99% is close to what a formal adjustment for seven comparisons
+would give. Neither interval allows for choosing the highest and lowest country
+each period.
+
+```{r rate-ratio-table}
+rate_ratio |>
+  transmute(Period = period,
+            Highest = highest_country, Lowest = lowest_country,
+            `Rate Ratio` = round(rate_ratio, 2),
+            `95% Interval` = sprintf("%.2f to %.2f", lower95, upper95),
+            `99% Interval` = sprintf("%.2f to %.2f", lower99, upper99),
+            `Extremes Overlap` = ifelse(cis_overlap, "Yes", "No"))
+```
+
+The Lowest column is the one to watch. Finland holds the bottom for the first
+four periods, and from 2010 onward it no longer does so reliably, because by
+then Finland and Iceland are running within about 0.1 of each other. Which of
+the two comes out lower flips with Iceland's swings from period to period rather
+than with any settled difference between them.
+
+That points at something the Extremes Overlap column cannot tell you. It
+compares the top country's lower bound against the bottom country's upper bound,
+and those are far apart in every period, which is why it reads No throughout. It
+confirms that a gap exists; it says nothing about *which* country sits at each
+end. On that question the labels are shakier than they look. In 2015 to 2019
+Denmark and Norway are 0.03 apart with almost identical intervals, so naming
+Denmark the highest is close to a coin flip, and the same goes for Finland
+against Iceland at the bottom in 2010 to 2014 and 2020 to 2024.
+
+The reassuring part is that this barely touches the answer. Swapping every one
+of those near-tied labels moves the ratios by at most 0.035 and the trend slope
+from -0.0291 to -0.0293. The size of the gap is solid. The names attached to its
+two ends, in those particular periods, are not.
+
+# Trend Test
+
+Looking at the chart above, the gap obviously shrinks. I did not want to rest on
+reading a slope off a picture though, so I tested it properly. I fitted a
+straight line through the seven ratios against the midpoint year of each period,
+working on the log scale so the slope reads as a percentage change rather than a
+fixed amount, and I weighted each period by how certain it is, so the shakier
+readings pull the line around less than the solid ones.
+
+```{r trend-test}
+trend_fit <- lm(log(rate_ratio) ~ period_mid,
+                data = rate_ratio, weights = 1 / var_log_ratio)
+
+trend_tidy <- tidy(trend_fit, conf.int = TRUE)
+
+trend_tidy |>
+  filter(term == "period_mid") |>
+  transmute(`Slope Per Year` = round(estimate, 5),
+            `Standard Error` = round(std.error, 5),
+            `95% Lower` = round(conf.low, 5),
+            `95% Upper` = round(conf.high, 5),
+            `P Value` = signif(p.value, 3),
+            `Annual Change` = sprintf("%.2f%%", (exp(estimate) - 1) * 100),
+            `Change Over 30 Years` = sprintf("%.1f%%", (exp(estimate * 30) - 1) * 100))
+```
+
+The slope comes out around twenty times its own standard error, which is why the
+p value lands where it does. A decline this consistent is not the sort of thing
+seven noisy points throw up by chance. A more intuitive way to read the annual
+figure is this: keep going at that rate and the gap halves roughly every 24
+years.
+
+One thing worth holding onto, though. This measures the trend in the *ratio*,
+not in anyone's risk. A ratio can shrink while every country's rate is climbing,
+and that is close to what is happening here.
+
+```{r trend-se}
+tq    <- qt(0.975, df.residual(trend_fit))
+slope <- coef(trend_fit)[["period_mid"]]
+
+se_relative <- sqrt(diag(vcov(trend_fit)))[["period_mid"]]
+se_exact    <- sqrt(diag(vcov(trend_fit)) /
+                      summary(trend_fit)$sigma^2)[["period_mid"]]
+
+tibble(Weighting = c("Weights Treated As Relative",
+                     "Weights Treated As Exact"),
+       se = c(se_relative, se_exact)) |>
+  transmute(Weighting,
+            `Standard Error` = round(se, 5),
+            `95% Lower` = round(slope - tq * se, 4),
+            `95% Upper` = round(slope + tq * se, 4),
+            `Fall Over 30 Years` =
+              sprintf("%.0f%% to %.0f%%",
+                      -(exp((slope + tq * se) * 30) - 1) * 100,
+                      -(exp((slope - tq * se) * 30) - 1) * 100))
+```
+
+The weights are treated as relative rather than exact, which is how the fitting
+function handles them by default, so the standard error reflects how closely the
+seven points sit around the line. They sit closer than their stated
+uncertainties implied. Taking those uncertainties at face value instead widens
+the 95% interval on the slope from -0.0328 to -0.0254 out to -0.0356 to -0.0226.
+That is a fall in the gap of roughly 49% to 66% over the 30 years, instead of
+53% to 63%. The conclusion is the same either way.
+
+```{r trend-plot}
+ggplot(rate_ratio, aes(period_mid, log(rate_ratio))) +
+  geom_smooth(aes(weight = 1 / var_log_ratio), method = "lm", formula = y ~ x,
+              colour = COUNTRY_COLORS[["Denmark"]], fill = GRID, linewidth = 0.8) +
+  geom_point(aes(size = 1 / var_log_ratio),
+             colour = COUNTRY_COLORS[["Denmark"]], show.legend = FALSE) +
+  scale_size_continuous(range = c(1.8, 5)) +
+  scale_x_continuous(breaks = rate_ratio$period_mid) +
+  labs(title = "Weighted Trend In The Log Rate Ratio",
+       x = "Period Midpoint Year", y = "Log Rate Ratio",
+       caption = SOURCE_NOTE) +
+  theme_eda()
+```
+
+The slope is negative and clearly separated from zero, at roughly 2.9% off the
+ratio each year with a p value near 0.0000056. Carried across the 30 years
+between the first and last midpoints, that is a fall of about 58% in the size of
+the gap. Larger points on the chart are the periods with tighter intervals,
+which is the weighting made visible: the later Iceland-driven periods count for
+less in fitting the line.
+
+The gap between the highest and lowest Nordic country has narrowed substantially
+across the study window, and the narrowing is larger than the uncertainty around
+it. Why it narrowed is a separate question that this project does not take up.
+
+```{r write-output, include = FALSE}
+dir.create(proj_file("output"), showWarnings = FALSE)
+
+asr_out <- asr |>
+  select(country, period, period_mid, asr,
+         lower95, upper95, lower99, upper99) |>
+  arrange(country, period)
+
+ratio_out <- rate_ratio |>
+  select(period, period_mid, highest_country, lowest_country,
+         highest_asr, lowest_asr, rate_ratio,
+         lower95, upper95, lower99, upper99, cis_overlap)
+
+trend_out <- trend_tidy |>
+  transmute(term, estimate, std_error = std.error, statistic,
+            p_value = p.value, conf_low = conf.low, conf_high = conf.high)
+
+write_csv(asr_out,   proj_file("output/asr_by_country_period.csv"))
+write_csv(ratio_out, proj_file("output/rate_ratio_by_period.csv"))
+write_csv(trend_out, proj_file("output/trend_test.csv"))
+```
