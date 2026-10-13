@@ -1576,7 +1576,12 @@ stopifnot(
   &quot;the collapsed vector is not 18 bands&quot; = length(esp18) == N_BANDS,
   &quot;collapsing changed the total weight&quot; = sum(esp18) == sum(esp2013),
   &quot;the top band is not the sum of the last two published weights&quot; =
-    esp18[18] == esp2013[18] + esp2013[19]
+    esp18[18] == esp2013[18] + esp2013[19],
+  # the four checks above all survive two weights being swapped with each
+  # other, and a swap can land inside the tolerance, so compare the bands
+  # that should not have moved at all
+  &quot;the first seventeen weights are not the published ones, in order&quot; =
+    identical(unname(esp18[1:17]), unname(esp2013[1:17]))
 )
 
 tibble(Measure = c(&quot;Published Bands&quot;, &quot;Collapsed Bands&quot;,
