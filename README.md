@@ -60,6 +60,8 @@ The populations also differ in age and have aged at different speeds. Finland's 
 ## 🛠️ Data Preparation & Modeling Pipeline
 Every rate is checked against NORDCAN's own published figures before any analysis starts.
 
+![Workflow From The NORDCAN Export To The Trend Test](output/figures/01-workflow-flowchart.png)
+
 1. **Read & Filter:** 10 NORDCAN files (seven incidence files, plus populations, age-specific numbers and age-specific rates) were kept to the five study countries.
 2. **Merge:** Case counts and populations were joined into one table of 630 rows: 5 countries, 7 periods and 18 age bands.
 3. **Person-Years:** NORDCAN gives an average annual population, and each period spans five years, so it is multiplied by 5. Skipping this makes every rate 5 times too large with no error raised.
