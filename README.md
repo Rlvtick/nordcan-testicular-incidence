@@ -161,7 +161,7 @@ nordcan-testicular-incidence/
 ├── renv.lock                               # pinned package versions
 └── nordcan-testicular-incidence.Rproj
 ```
-The knitted `.html` reports are standalone files. Download one and open it in a browser to read it.
+Read the knitted reports online: [exploratory report](https://rlvtick.github.io/nordcan-testicular-incidence/R/02_eda.html) and [modeling report](https://rlvtick.github.io/nordcan-testicular-incidence/R/03_modeling.html).
 
 ---
 
