@@ -8,13 +8,15 @@
 ![renv](https://img.shields.io/badge/renv-5C8A3A?style=for-the-badge)
 ![Git](https://img.shields.io/badge/Git-F05032?style=for-the-badge&logo=git&logoColor=white)
 
+**Contents:** [Summary](#-executive-summary) · [Business Understanding](#-business-understanding--problem-statement) · [Data](#-data-understanding) · [Pipeline](#pipeline) · [Results](#-results--validation) · [Limits](#-interpretation--limits) · [Structure](#repository-structure) · [Reproduce](#-reproducing-the-analysis) · [Sources](#-sources--attribution) · [License](#-license)
+
 ## 📌 Executive Summary
 This project measures how far apart five Nordic countries (Denmark, Finland, Iceland, Norway and Sweden) are in testicular cancer incidence, and whether that gap narrowed between 1990 and 2024. It uses public registry data from NORDCAN 2.0, one age-standardized rate for every country and five-year period, and a highest-to-lowest rate ratio for each period. It quantifies the gap and does not explain it. The full story is in the [slide deck (PDF)](nordcan-testicular-cancer-deck.pdf).
 
 * **Scale:** **34,568 cases** of testicular cancer across **5 countries** and **7 five-year periods**, analyzed as 630 age-specific rows.
 * **Core Finding:** The highest country's rate went from **3.82 times** the lowest country's rate in 1990-94 (Denmark against Finland) to **1.83 times** in 2020-24 (Denmark against Iceland), a **52% fall**. The narrowest point was **1.79** in 2015-19.
 * **Trend:** A weighted regression puts the average change in the ratio at **-2.9% a year** (95% interval -3.2% to -2.5%).
-* **Reliability:** The 95% intervals of the first and last ratios do not overlap (3.37 to 4.34 against 1.40 to 2.40), so the narrowing is larger than the uncertainty around it.
+* **Reliability:** The 95% intervals of the first and last ratios do not overlap (3.37 to 4.34 against 1.40 to 2.40), so the narrowing is larger than the uncertainty around it. The caveats, including how the extremes are chosen, are under [Interpretation & Limits](#-interpretation--limits).
 * **Validation:** The largest difference between the computed rates and NORDCAN's own published rates is **0.00015**, against a tolerance of 0.05 that was set before any computation ran.
 
 ---
@@ -56,6 +58,8 @@ The populations also differ in age and have aged at different speeds. Finland's 
 **No data files are included in this repository.** It holds the code and the results only, so the pipeline cannot be re-run without exporting the data from NORDCAN directly (see [Reproducing The Analysis](#-reproducing-the-analysis)).
 
 ---
+
+<a id="pipeline"></a>
 
 ## 🛠️ Data Preparation & Modeling Pipeline
 Every rate is checked against NORDCAN's own published figures before any analysis starts.
@@ -141,10 +145,13 @@ The ratio fell at 5 of the 6 steps between periods. The fitted line says:
 
 ---
 
+<a id="repository-structure"></a>
+
 ## 🗂️ Repository Structure
 ```
 nordcan-testicular-incidence/
 ├── README.md
+├── LICENSE
 ├── nordcan-testicular-cancer-deck.pdf      # slide deck, 14 pages
 ├── R/
 │   ├── 00_setup.R                          # shared paths, colors, chart theme, standard-population checks
@@ -156,7 +163,7 @@ nordcan-testicular-incidence/
 │   ├── asr_by_country_period.csv           # 35 standardized rates with 95% and 99% intervals
 │   ├── rate_ratio_by_period.csv            # 7 rate ratios with intervals
 │   ├── trend_test.csv                      # the weighted regression
-│   └── figures/                            # 9 charts (PNG)
+│   └── figures/                            # 10 charts (PNG)
 ├── renv.lock                               # pinned package versions
 └── nordcan-testicular-incidence.Rproj
 ```
@@ -165,10 +172,14 @@ The knitted `.html` reports are standalone files. Download one and open it in a 
 ---
 
 ## 🔁 Reproducing The Analysis
-1. **Export the data from NORDCAN** at [nordcan.iarc.fr](https://nordcan.iarc.fr) using the selection listed under *Data Source And Attribution* at the top of `R/02_eda.Rmd`: incidence, males, testis, by country, all age groups, seven five-year periods from 1990-94 to 2020-24.
-2. **Place the ten files in `data/raw/`:** seven `dataset-inc-males-<period>.csv` files, plus `dataset_age-specific_numbers.xlsx`, `dataset_age-specific_rates.xlsx` and `dataset_populations.xlsx`.
-3. **Restore the packages** with `renv::restore()`, which reads `renv.lock` (R 4.6.1).
-4. **Run in order:** `R/01_data_preparation.R`, then knit `R/02_eda.Rmd` and `R/03_modeling.Rmd`, then run `R/export_charts.R`.
+1. **Export the data from NORDCAN** at [nordcan.iarc.fr](https://nordcan.iarc.fr) using the selection listed under *Data Source And Attribution* at the top of `R/02_eda.Rmd`: incidence, males, testis, by country, all age groups, seven five-year periods from 1990-94 to 2020-24. Two of the exports download directly: the seven rate tables (one `dataset-inc-males-<period>.csv` per period) and `dataset_age-specific_rates.xlsx`.
+2. **Build the other two workbooks by hand.** The download button did not work for the age-specific numbers and populations tables, so `dataset_age-specific_numbers.xlsx` and `dataset_populations.xlsx` were copied from NORDCAN's tables into a spreadsheet and saved as Excel. `R/01_data_preparation.R` reads all three workbooks with the same function, so use the layout of the directly downloaded `dataset_age-specific_rates.xlsx` as the template:
+   * One tab per period, named `1990-1994`, `1995-1999` and so on up to `2020-2024`.
+   * The country name in column A and the all-ages total in column B. Rows for any region other than the five study countries are ignored.
+   * One column per five-year age group, headed by its starting age as a number: 0, 5, 10 and so on up to 85.
+3. **Place the ten files in `data/raw/`:** the seven `dataset-inc-males-<period>.csv` files, plus `dataset_age-specific_numbers.xlsx`, `dataset_age-specific_rates.xlsx` and `dataset_populations.xlsx`.
+4. **Restore the packages** with `renv::restore()`, which reads `renv.lock` (R 4.6.1).
+5. **Run in order:** `R/01_data_preparation.R`, then knit `R/02_eda.Rmd` and `R/03_modeling.Rmd`, then run `R/export_charts.R`.
 
 ---
 
@@ -177,4 +188,11 @@ The knitted `.html` reports are standalone files. Download one and open it in a 
 * Tichanek et al. (2023). *Cancers (Basel)*. DOI: [10.3390/cancers15174261](https://doi.org/10.3390/cancers15174261).
 * Standard population: European Standard Population 2013, via the `PHEindicatormethods` R package.
 
-**Author:** Moreno Achmad Musadat
+---
+
+## 📄 License
+The code in this repository is released under the [MIT License](LICENSE).
+
+---
+
+**Author:** Moreno Achmad Musadat · [GitHub](https://github.com/Rlvtick) · [LinkedIn](https://www.linkedin.com/in/morenomusadat/) · [morenoamusadat@gmail.com](mailto:morenoamusadat@gmail.com)
