@@ -8,8 +8,6 @@
 ![renv](https://img.shields.io/badge/renv-5C8A3A?style=for-the-badge)
 ![Git](https://img.shields.io/badge/Git-F05032?style=for-the-badge&logo=git&logoColor=white)
 
-**Contents:** [Summary](#-executive-summary) · [Business Understanding](#-business-understanding--problem-statement) · [Data](#-data-understanding) · [Pipeline](#pipeline) · [Results](#-results--validation) · [Limits](#-interpretation--limits) · [Structure](#repository-structure) · [Reproduce](#-reproducing-the-analysis) · [Sources](#-sources--attribution) · [License](#-license)
-
 ## 📌 Executive Summary
 This project measures how far apart five Nordic countries (Denmark, Finland, Iceland, Norway and Sweden) are in testicular cancer incidence, and whether that gap narrowed between 1990 and 2024. It uses public registry data from NORDCAN 2.0, one age-standardized rate for every country and five-year period, and a highest-to-lowest rate ratio for each period. It quantifies the gap and does not explain it. The full story is in the [slide deck (PDF)](nordcan-testicular-cancer-deck.pdf).
 
@@ -195,4 +193,4 @@ The code in this repository is released under the [MIT License](LICENSE).
 
 ---
 
-**Author:** Moreno Achmad Musadat · [GitHub](https://github.com/Rlvtick) · [LinkedIn](https://www.linkedin.com/in/morenomusadat/) · [morenoamusadat@gmail.com](mailto:morenoamusadat@gmail.com)
+**Author:** Moreno Achmad Musadat
