@@ -57,8 +57,6 @@ The populations also differ in age and have aged at different speeds. Finland's 
 
 ---
 
-<a id="pipeline"></a>
-
 ## 🛠️ Data Preparation & Modeling Pipeline
 Every rate is checked against NORDCAN's own published figures before any analysis starts.
 
@@ -142,8 +140,6 @@ The ratio fell at 5 of the 6 steps between periods. The fitted line says:
 * **Risk:** The ratio compares population rates between countries. It says nothing about any individual's risk.
 
 ---
-
-<a id="repository-structure"></a>
 
 ## 🗂️ Repository Structure
 ```
