@@ -17,8 +17,6 @@ This project measures how far apart five Nordic countries (Denmark, Finland, Ice
 * **Reliability:** The 95% intervals of the first and last ratios do not overlap (3.37 to 4.34 against 1.40 to 2.40), so the narrowing is larger than the uncertainty around it.
 * **Validation:** The largest difference between the computed rates and NORDCAN's own published rates is **0.00015**, against a tolerance of 0.05 that was set before any computation ran.
 
-![Highest To Lowest Rate Ratio, With 95% And 99% Intervals](output/figures/03-rate-ratio-plot.png)
-
 ---
 
 ## 🏢 Business Understanding & Problem Statement
